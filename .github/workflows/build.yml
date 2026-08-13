@@ -7,9 +7,12 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: write  # required to create a GitHub Release and upload assets
+
 jobs:
   build-and-install-flatpak:
-    runs-on: ubuntu-26.04  # Change to ubuntu-26.04 when GitHub adds it
+    runs-on: ubuntu-24.04  # Change to ubuntu-26.04 when GitHub adds it
     env:
       INSTALL_PREFIX: /usr/local
 
@@ -148,18 +151,77 @@ jobs:
         working-directory: flatpak-src
         run: meson compile -C _build
 
-      - name: Install Flatpak
+      - name: Stage install into packaging root
         working-directory: flatpak-src
-        run: sudo meson install -C _build
+        run: |
+          DESTDIR="$GITHUB_WORKSPACE/pkgroot" meson install -C _build
+          echo "=== Staged tree ==="
+          find "$GITHUB_WORKSPACE/pkgroot" -maxdepth 3
 
-      - name: Update library cache
-        run: sudo ldconfig
+      - name: Install Flatpak system-wide (for the verify step below)
+        working-directory: flatpak-src
+        run: |
+          sudo meson install -C _build
+          sudo ldconfig
 
       - name: Verify installation
         run: |
           echo "=== Installed Flatpak version ==="
           ${{ env.INSTALL_PREFIX }}/bin/flatpak --version
           which flatpak
+
+      - name: Build .deb package
+        id: build-deb
+        run: |
+          RAW_TAG="${{ steps.get-latest-tag.outputs.tag }}"
+          # Strip a leading 'v' if the upstream tag has one; Debian versions shouldn't
+          PKG_VERSION="${RAW_TAG#v}"
+          PKG_NAME="flatpak-latest"
+          ARCH="amd64"
+          PKG_ROOT="$GITHUB_WORKSPACE/pkgroot"
+          DEB_FILE="${PKG_NAME}_${PKG_VERSION}_${ARCH}.deb"
+
+          mkdir -p "$PKG_ROOT/DEBIAN"
+
+          cat > "$PKG_ROOT/DEBIAN/control" <<EOF
+          Package: $PKG_NAME
+          Version: $PKG_VERSION
+          Section: utils
+          Priority: optional
+          Architecture: $ARCH
+          Maintainer: ${{ github.repository_owner }} <noreply@github.com>
+          Depends: libglib2.0-0, libostree-1-1, libarchive13, libzstd1, libcap2, libseccomp2, libcurl4, libsystemd0, libgpgme11, libpolkit-gobject-1-0, libfuse3-3, bubblewrap (>= 0.10.0), xdg-dbus-proxy
+          Description: Flatpak $RAW_TAG built from source
+           Automated build of Flatpak $RAW_TAG from the upstream source tree,
+           packaged as a .deb for installation on Debian/Ubuntu-based systems.
+           Installs to ${{ env.INSTALL_PREFIX }}.
+          EOF
+
+          # Ownership/permissions must be root:root for dpkg-deb
+          sudo chown -R root:root "$PKG_ROOT"
+
+          sudo dpkg-deb --build --root-owner-group "$PKG_ROOT" "$DEB_FILE"
+          dpkg-deb --info "$DEB_FILE"
+          dpkg-deb --contents "$DEB_FILE" | head -20
+
+          echo "deb_file=$DEB_FILE" >> "$GITHUB_OUTPUT"
+          echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "raw_tag=$RAW_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release with .deb asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: flatpak-${{ steps.build-deb.outputs.raw_tag }}-${{ github.run_number }}
+          name: Flatpak ${{ steps.build-deb.outputs.raw_tag }} (.deb build)
+          body: |
+            Automated build of Flatpak ${{ steps.build-deb.outputs.raw_tag }} from source,
+            packaged as a `.deb` for Ubuntu/Debian.
+
+            Install with:
+            ```
+            sudo apt install ./${{ steps.build-deb.outputs.deb_file }}
+            ```
+          files: ${{ steps.build-deb.outputs.deb_file }}
 
       - name: Upload build artifacts
         if: always()
