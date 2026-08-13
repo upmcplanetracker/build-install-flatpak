@@ -189,8 +189,11 @@ jobs:
           cat shlib-input-files.txt
 
           # -O writes substvars to stdout instead of debian/substvars
+          # The added sed expression 's/ ([^)]*)//g' strips exact version pins 
+          # so the package will resolve cleanly on newer OS targets.
           DEPS=$(dpkg-shlibdeps -O --ignore-missing-info $BIN_LIST 2>&1 \
-            | grep '^shlibs:Depends=' | sed 's/^shlibs:Depends=//')
+            | grep '^shlibs:Depends=' \
+            | sed -e 's/^shlibs:Depends=//' -e 's/ ([^)]*)//g')
 
           if [ -z "$DEPS" ]; then
             echo "WARNING: dpkg-shlibdeps produced no deps; falling back to manual list"
