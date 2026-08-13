@@ -9,7 +9,7 @@ on:
 
 jobs:
   build-and-install-flatpak:
-    runs-on: ubuntu-24.04  # Change to ubuntu-26.04 when GitHub adds it
+    runs-on: ubuntu-26.04  # Change to ubuntu-26.04 when GitHub adds it
     env:
       INSTALL_PREFIX: /usr/local
 
@@ -65,6 +65,39 @@ jobs:
             libext2fs-dev \
             libc6-dev \
             openssl
+
+      - name: Build and install current bubblewrap
+        # Ubuntu 24.04's packaged bubblewrap (0.9.0) is below Flatpak's
+        # required system_bubblewrap >= 0.10.0, so build a current release
+        # from source and install it ahead of the packaged one on PATH.
+        run: |
+          BWRAP_TAG=$(curl -sL \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/containers/bubblewrap/releases/latest | \
+            jq -r '.tag_name // empty')
+
+          if [ -z "$BWRAP_TAG" ] || [ "$BWRAP_TAG" = "null" ]; then
+            BWRAP_TAG=$(git ls-remote --tags --sort=-v:refname \
+              https://github.com/containers/bubblewrap.git | \
+              grep -oP 'refs/tags/\Kv?[0-9]+\.[0-9]+\.[0-9]+$' | \
+              head -n1)
+          fi
+
+          echo "Latest bubblewrap tag: $BWRAP_TAG"
+
+          git clone --branch "$BWRAP_TAG" --recursive --depth 1 \
+            https://github.com/containers/bubblewrap.git bubblewrap-src
+
+          cd bubblewrap-src
+          meson setup _build --prefix=${{ env.INSTALL_PREFIX }}
+          meson compile -C _build
+          sudo meson install -C _build
+          sudo ldconfig
+
+          echo "=== Installed bubblewrap version ==="
+          hash -r
+          which bwrap
+          bwrap --version
 
       - name: Fetch latest Flatpak release tag
         id: get-latest-tag
