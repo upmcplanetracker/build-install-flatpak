@@ -67,7 +67,9 @@ jobs:
             e2fsprogs \
             libext2fs-dev \
             libc6-dev \
-            openssl
+            openssl \
+            dpkg-dev \
+            file
 
       - name: Build and install current bubblewrap
         # Ubuntu 24.04's packaged bubblewrap (0.9.0) is below Flatpak's
@@ -170,6 +172,34 @@ jobs:
           ${{ env.INSTALL_PREFIX }}/bin/flatpak --version
           which flatpak
 
+      - name: Compute runtime dependencies
+        id: shlibdeps
+        run: |
+          PKG_ROOT="$GITHUB_WORKSPACE/pkgroot"
+          mkdir -p "$PKG_ROOT/DEBIAN"
+
+          # dpkg-shlibdeps needs a control file present (even a stub) and
+          # wants to run from inside a debian/ layout, so fake enough
+          # structure for it to inspect the built ELF binaries directly.
+          BIN_LIST=$(find "$PKG_ROOT" -type f \( -perm -u+x -o -name '*.so*' \) \
+            -exec sh -c 'file "$1" | grep -q ELF' _ {} \; -print)
+
+          echo "$BIN_LIST" > shlib-input-files.txt
+          echo "=== Binaries/libs being scanned for deps ==="
+          cat shlib-input-files.txt
+
+          # -O writes substvars to stdout instead of debian/substvars
+          DEPS=$(dpkg-shlibdeps -O --ignore-missing-info $BIN_LIST 2>&1 \
+            | grep '^shlibs:Depends=' | sed 's/^shlibs:Depends=//')
+
+          if [ -z "$DEPS" ]; then
+            echo "WARNING: dpkg-shlibdeps produced no deps; falling back to manual list"
+            DEPS="libglib2.0-0, libostree-1-1, libarchive13, libzstd1, libcap2, libseccomp2, libcurl4, libsystemd0, libgpgme11t64, libpolkit-gobject-1-0, libfuse3-3"
+          fi
+
+          echo "Resolved deps: $DEPS"
+          echo "deps=$DEPS" >> "$GITHUB_OUTPUT"
+
       - name: Build .deb package
         id: build-deb
         run: |
@@ -190,7 +220,10 @@ jobs:
           Priority: optional
           Architecture: $ARCH
           Maintainer: ${{ github.repository_owner }} <noreply@github.com>
-          Depends: libglib2.0-0, libostree-1-1, libarchive13, libzstd1, libcap2, libseccomp2, libcurl4, libsystemd0, libgpgme11, libpolkit-gobject-1-0, libfuse3-3, bubblewrap (>= 0.10.0), xdg-dbus-proxy
+          Depends: ${{ steps.shlibdeps.outputs.deps }}, bubblewrap (>= 0.10.0), xdg-dbus-proxy
+          Conflicts: flatpak
+          Replaces: flatpak
+          Provides: flatpak
           Description: Flatpak $RAW_TAG built from source
            Automated build of Flatpak $RAW_TAG from the upstream source tree,
            packaged as a .deb for installation on Debian/Ubuntu-based systems.
@@ -202,7 +235,7 @@ jobs:
 
           sudo dpkg-deb --build --root-owner-group "$PKG_ROOT" "$DEB_FILE"
           dpkg-deb --info "$DEB_FILE"
-          dpkg-deb --contents "$DEB_FILE" | head -20
+          dpkg-deb --contents "$DEB_FILE" | wc -l
 
           echo "deb_file=$DEB_FILE" >> "$GITHUB_OUTPUT"
           echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
