@@ -23,6 +23,8 @@ jobs:
             ninja-build \
             gettext \
             bison \
+            xsltproc \
+            docbook-xsl \
             libglib2.0-dev \
             libgirepository1.0-dev \
             gobject-introspection \
