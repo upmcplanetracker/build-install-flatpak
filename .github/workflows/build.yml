@@ -245,7 +245,7 @@ jobs:
           echo "raw_tag=$RAW_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release with .deb asset
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: flatpak-${{ steps.build-deb.outputs.raw_tag }}-${{ github.run_number }}
           name: Flatpak ${{ steps.build-deb.outputs.raw_tag }} (.deb build)
